@@ -222,13 +222,13 @@ zfs_cmd() {
 }
 
 mklinks() {
-    local _f _l
+    local _f _l _q
 
     for _f in $(cat $_zfsx | egrep '^    z[a-z]{1,3}.*# ln$' | \
                 cut -f 1 -d '|' | sed 's/    //;'); do
         _l=${_dir}/$_f
         if [ -e $_l ]; then
-            echo skipping $_l...
+            [ $verbose -eq 1 ] && echo skipping $_l...
         else
             ln -s $_zfsx $_l
             echo "created link '$_l'"
@@ -277,11 +277,10 @@ update() {
         rm $_f
         rm $_o
     fi
-    diff --brief $_zfsx $_f > /dev/null
-    if [ $? -eq 0 ]; then
+    if [ `md5 -q $_f` = `md5 -q $_zfsx` ]; then
         echo $_zfsx is up to date
-        rm $_f
-        rm $_o
+        rm -f $_f || true
+        rm -f $_o || true
     else
         echo updating $_zfsx...
         echo backup up existing version of $_zfsx to $_o
