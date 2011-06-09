@@ -269,9 +269,14 @@ update() {
     fi
 
     local _f _o
-    _f=`mktemp ${_zfsx}.XXXXX` || die "couldn't create temp file"
-    _o=`mktemp ${_zfsx}.XXXXX` || die "couldn't create temp file"
-    cmd fetch -o $_f $master > /dev/null
+    _f=`mktemp /tmp/zfsx.XXXXX` || die "couldn't create temp file"
+    _o=`mktemp /tmp/zfsx.XXXXX` || die "couldn't create temp file"
+    cmd fetch -o $_f $master > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo failed to fetch $master
+        rm $_f
+        rm $_o
+    fi
     diff --brief $_zfsx $_f > /dev/null
     if [ $? -eq 0 ]; then
         echo $_zfsx is up to date
