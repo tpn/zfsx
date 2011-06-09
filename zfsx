@@ -278,14 +278,14 @@ update() {
         rm $_o
     fi
     if [ `md5 -q $_f` = `md5 -q $_zfsx` ]; then
-        echo $_zfsx is up to date
+        echo $_zfsx is already up to date
         rm -f $_f || true
         rm -f $_o || true
     else
-        echo updating $_zfsx...
-        echo backup up existing version of $_zfsx to $_o
+        echo downloaded new version of zfsx to $_f
+        echo backing up existing version of $_zfsx to $_o...
         cp $_zfsx $_o
-        echo moving new version $_f to $_zfsx
+        echo moving new version $_f to $_zfsx...
         mv $_f $_zfsx
         if ! yesno "keep backup $_o?" "n"; then
             rm $_o || true
