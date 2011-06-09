@@ -271,7 +271,7 @@ update() {
     local _f _o
     _f=`mktemp /tmp/zfsx.XXXXX` || die "couldn't create temp file"
     _o=`mktemp /tmp/zfsx.XXXXX` || die "couldn't create temp file"
-    cmd fetch -o $_f $master > /dev/null 2>&1
+    fetch -o $_f $master > /dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo failed to fetch $master
         rm $_f
