@@ -248,7 +248,7 @@ mklinks() {
         if [ -e $_l ]; then
             echo skipping $_l...
         else
-            ln -s $_zfsx ${_dir}/$_l
+            ln -s $_zfsx $_l
             echo "created link '$_l'"
         fi
     done
