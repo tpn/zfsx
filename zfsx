@@ -240,13 +240,19 @@ zfs_cmd() {
 }
 
 mklinks() {
+    local _f _l
 
-    for _l in $(cat $_zfsx | egrep '^    z[a-z]{1,3}.*# ln$' | \
+    for _f in $(cat $_zfsx | egrep '^    z[a-z]{1,3}.*# ln$' | \
                 cut -f 1 -d '|' | sed 's/    //;'); do
-        ln -sf $_zfsx ${_dir}/$_l
+        _l=${_dir}/$_f
+        if [ -e $_l ]; then
+            echo skipping $_l...
+        else
+            ln -s $_zfsx ${_dir}/$_l
+            echo "created link '$_l'"
+        fi
     done
     return
-
 }
 
 usage() {
