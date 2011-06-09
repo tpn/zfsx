@@ -6,6 +6,7 @@
 # globals                                                                    #
 #----------------------------------------------------------------------------#
 dryrun=0
+master="https://raw.github.com/tpn/zfsx/master/zfsx"
 verbose=0
 dataset=""
 command=""
@@ -236,6 +237,61 @@ mklinks() {
     return
 }
 
+ask() {
+    local question default answer
+    question=$1
+    default=$2
+    read -p "${question} [${default}] " answer
+    if [ -z "${answer}" ]; then
+        answer=${default}
+    fi
+    echo ${answer}
+}
+
+yesno() {
+    local question default answer
+    question=$1
+    default=$2
+    while :; do
+        answer=$(ask "${question}" "${default}")
+        case "${answer}" in
+        [Yy]*)  return 0;;
+        [Nn]*)  return 1;;
+        esac
+        echo "Please answer yes or no."
+    done
+}
+
+update() {
+    if [ -d "${_dir}/.git" ]; then
+        echo error: not updating, git directory detected: ${_dir}/.git
+        exit 1
+    fi
+
+    local _f _o
+    _f=`mktemp ${_zfsx}.XXXXX` || die "couldn't create temp file"
+    _o=`mktemp ${_zfsx}.XXXXX` || die "couldn't create temp file"
+    cmd fetch -o $_f $master > /dev/null
+    diff --brief $_zfsx $_f > /dev/null
+    if [ $? -eq 0 ]; then
+        echo $_zfsx is up to date
+        rm $_f
+        rm $_o
+    else
+        echo updating $_zfsx...
+        echo backup up existing version of $_zfsx to $_o
+        cp $_zfsx $_o
+        echo moving new version $_f to $_zfsx
+        mv $_f $_zfsx
+        if ! yesno "keep backup $_o?" "n"; then
+            rm $_o || true
+        fi
+        chown root:wheel $_zfsx
+        chmod 555 $_zfsx
+        sh $_zfsx mklinks
+    fi
+}
+
 usage() {
     echo "usage: xxx todo"
     exit 1
@@ -283,6 +339,9 @@ main() {
         ;;
     zg|get) # ln
         zfs_cmd get $*
+        ;;
+    update)
+        update
         ;;
     zm|mount) # ln
         _prepare_cmd mount $*
