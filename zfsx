@@ -1,0 +1,361 @@
+#!/bin/sh
+
+# Copyright 2011, Trent Nelson.
+
+#----------------------------------------------------------------------------#
+# globals                                                                    #
+#----------------------------------------------------------------------------#
+dryrun=0
+verbose=0
+dataset=""
+command=""
+options=""
+prepared=0
+mountpoint=""
+base_dataset=""
+base_mountpoint=""
+
+#----------------------------------------------------------------------------#
+# cruft                                                                      #
+#----------------------------------------------------------------------------#
+_cwd=`pwd`
+_dir=`dirname $0`
+echo $_dir | grep '^\.' > /dev/null 2>&1 && \
+    _dir=${_cwd}`echo ${_dir} | sed -e 's/^\.//'`
+_zfsx=${_dir}/zfsx
+_zfsx_sudo=${_zfsx}_sudo
+
+if [ ! -f $_zfsx ]; then
+    echo error: $_zfsx not a normal file
+    exit 1
+fi
+
+#----------------------------------------------------------------------------#
+# leverage freebsd's /etc/rc.* infrastructure                                #
+#----------------------------------------------------------------------------#
+. /etc/rc.subr
+name="zfsx"
+rcvar=`set_rcvar`
+load_rc_config "$name"
+: ${zfsx_devmode="NO"}
+
+if ! checkyesno zfsx_devmode; then # devmode:start
+    _expected="-r-xr-xr-x 1 0 0"
+    _actual=`ls -ln $_zfsx | grep "${_zfsx}\$" | cut -f 1-5 -d ' '`
+    if [ "$_expected" != "$_actual" ]; then
+        echo error: incorrect permissions for $_zfsx
+        echo expected: $_expected, got: $_actual
+        exit 1
+    fi
+fi # devmode:end
+
+#----------------------------------------------------------------------------#
+# error handlers                                                             #
+#----------------------------------------------------------------------------#
+set -o errexit
+set -o nounset
+
+#----------------------------------------------------------------------------#
+# public helpers                                                             #
+#----------------------------------------------------------------------------#
+cmd() {
+    local _verbose
+    _verbose=0
+    if [ $dryrun -ne 0 -o $verbose -eq 1 ]; then
+        _verbose=1
+    fi
+    if [ $_verbose -eq 1 ]; then
+        echo $*
+    fi
+
+    if [ $dryrun -eq 0 ]; then
+        eval $*
+    fi
+}
+
+die() {
+    echo $*
+    exit 1
+}
+
+#----------------------------------------------------------------------------#
+# private helpers                                                            #
+#----------------------------------------------------------------------------#
+_resolve() {
+
+    local _mntpt _zfs_mntpt _p _dataset
+    dataset=""
+    mountpoint=""
+    base_dataset=""
+    base_mountpoint=""
+
+    _p=$1
+
+    # . -> `pwd`
+    if [ "$_p" = "." ]; then
+        _p=`pwd`
+    fi
+
+    # ./foo -> foo
+    echo $_p | egrep '^\.\/' > /dev/null && \
+        _p=`echo $_p | sed -e 's:^\./::'`
+
+    # prohibit ^.. or /.
+    echo $_p | egrep '^\.\.|\/\.|\\' > /dev/null && {
+        echo invalid path: $_p
+        return 1
+    }
+
+    # if it doesn't start with /, but has multiple slashes in it,
+    # it might be a dataset (should probably just check to see if
+    # the name starts with a zpool name)
+    if `echo $_p | egrep '^[^/]+/' > /dev/null`; then
+        dataset=`zfs list -H -t filesystem -o name | grep "^${_p}$"`
+        if [ -n "$dataset" ]; then
+            mountpoint=`zfs get -H -o value mountpoint $dataset`
+            return 0
+        fi
+    fi
+
+    # if it doesn't start with /, abs it via `pwd`
+    if `echo $_p | grep -v '^/' > /dev/null`; then
+        _mntpt=`pwd`/$_p
+    else
+        _mntpt=$_p
+    fi
+
+    if [ "$command" = "create" ]; then
+        _mntpt=`dirname $_mntpt`
+    fi
+
+    # verify there's a corresponding zfs mountpoint by the same name
+    _zfs_mntpt=`zfs list -H -o mountpoint | grep "^${_mntpt}$"`
+    if [ -z "$_zfs_mntpt" ]; then
+        echo error: $_mntpt is not backed by a zfs dataset
+        return 1
+    fi
+    if [ "$_zfs_mntpt" != "$_mntpt" ]; then
+        echo "mountpoint mismatch: $_zfs_mntpt vs $_mntpt"
+        return 1
+    fi
+
+    # look for a corresponding zfs dataset for the mountpoint
+    _dataset=`zfs list -H -t filesystem -o name,mountpoint | \
+             grep '	'${_mntpt}'$' | cut -f 1`
+
+    if [ -z "$_dataset" ]; then
+        die "error: invariant violated: couldn't resolve \
+             zfs dataset for mountpoint $_mntpt"
+    fi
+
+    if [ "$command" = "create" ]; then
+        base_dataset=$_dataset
+        base_mountpoint=$_mntpt
+        dataset=$_dataset/$_p
+        mountpoint=$_mntpt/$_p
+    else
+        dataset=$_dataset
+        mountpoint=$_mntpt
+    fi
+
+    return 0
+}
+
+_prepare_cmd() {
+    local _p _opts
+    command=$1
+    shift
+    [ $# -eq 0 ] && die "_prepare_cmd incorrect usage"
+    options=""
+
+    eval _p=\"\${$#}\"
+    _resolve $_p || exit 1
+
+    _opts=""
+    while : ; do
+        [ $# -eq 1 ] && break
+        _opts="$_opts $1"
+        shift
+    done
+
+    options=$_opts
+}
+
+#----------------------------------------------------------------------------#
+# main zfs methods for public consumption and great justice                  #
+#----------------------------------------------------------------------------#
+
+zfs_allowed() {
+    local _require_sudo _cmd _p _u _group _perms
+    _require_sudo=0
+    if [ "$1" = "require-sudo" ]; then
+        _require_sudo=1
+        shift
+    fi
+
+    _cmd=$1
+    _p=$2
+
+    if [ `id -u` -eq 0 ]; then
+        if [ -z "${SUDO_USER:-}" ]; then
+            if [ $_require_sudo -eq 1 ]; then
+                echo error: sudo required for $_cmd $_p
+                return 1
+            fi
+            return 0
+        else
+            _u=$SUDO_USER
+        fi
+    else
+        if [ $_require_sudo -eq 1 ]; then
+            echo error: sudo required for $_cmd $_p
+            return 1
+        fi
+        _u=`id -un`
+    fi
+
+    _group=@`zfs allow $_p | egrep "^	user $_u @[a-zA-Z0-9]+$" | \
+            cut -f 2 -d '@'`
+
+    if [ $? -ne 0 -o -z "$_group" ]; then
+        echo "error: no permissions set for user $_u on $_p"
+        return 1
+    fi
+
+    zfs allow $_p | egrep "^	$_group ($_cmd|.+,$_cmd)(,|$)" \
+        > /dev/null 2>&1
+
+    if [ $? -ne 0 ]; then
+        echo "error: user $_u does not have '$_cmd' permission" \
+             "set for $dataset"
+        return 1
+    fi
+
+    return 0
+}
+
+zfs_cmd() {
+    _prepare_cmd $*
+    cmd zfs $command $options $dataset
+}
+
+mklinks() {
+
+    for _l in $(cat $_zfsx | egrep '^    z[a-z]{1,3}.*# ln$' | \
+                cut -f 1 -d '|' | sed 's/    //;'); do
+        ln -sf $_zfsx ${_dir}/$_l
+    done
+    return
+
+}
+
+usage() {
+    echo "usage: xxx todo"
+    exit 1
+}
+
+#----------------------------------------------------------------------------#
+# main                                                                       #
+#----------------------------------------------------------------------------#
+main() {
+    local _cmd _perm _p
+    _perm=""
+    _cmd=$1
+    shift
+    case "$_cmd" in
+    zfsx)
+        main $*
+        ;;
+    mklinks)
+        mklinks
+        ;;
+    zc|create) # ln
+        [ $# -lt 1 ] && usage
+        _prepare_cmd create $*
+        options="$options -o canmount=noauto"
+        zfs_allowed $command $base_dataset || return 1
+        cmd zfs $command $options $dataset || return 1
+
+        sudo $_zfsx set-canmount-on $dataset
+        sudo $_zfsx mount $dataset
+        return 0
+
+        ;;
+    zd|destroy) # ln
+        [ $# -lt 1 ] && usage
+        _prepare_cmd destroy $*
+        zfs_allowed $command $dataset || return 1
+        if [ -n "${SUDO_USER:-}" ]; then
+            cmd zfs $command $options $dataset
+        else
+            sudo $_zfsx $command $options $dataset
+        fi
+        ;;
+    zs|set) # ln
+        zfs_cmd set $*
+        ;;
+    zg|get) # ln
+        zfs_cmd get $*
+        ;;
+    zm|mount) # ln
+        _prepare_cmd mount $*
+        zfs_allowed require-sudo mount $dataset || return 1
+        cmd zfs mount $dataset || return 1
+        ;;
+    set-canmount-on)
+        [ $# -ne 1 ] && usage
+        _resolve $1
+        zfs_allowed require-sudo canmount $dataset || return 1
+        cmd zfs set canmount=on $dataset
+        ;;
+    zpd|resolve-dataset) # ln
+        local _p
+        _p=""
+        while : ; do
+            [ $# -eq 0 ] && break
+            _resolve $1 || break
+            _p="$_p $dataset"
+            shift
+        done
+        echo $_p
+        ;;
+    zpm|resolve-mountpoint) # ln
+        local _p
+        _p=""
+        while : ; do
+            [ $# -eq 0 ] && break
+            _resolve $1 || break
+            _p="$_p $mountpoint"
+            shift
+        done
+        echo $_p
+        ;;
+    *)
+        echo error: unknown command: $_cmd
+    esac
+
+    return
+}
+
+[ $# -eq 0 ] && usage
+
+while : ; do
+    case "$1" in
+    -v)
+        verbose=1
+        shift
+        ;;
+    -d)
+        dryrun=1
+        shift
+        ;;
+    *)
+        break
+    esac
+done
+
+[ $# -eq 0 ] && usage
+
+main `basename $0` $*
+
+# vim:set ts=8 sw=4 sts=4 expandtab syntax=sh:
