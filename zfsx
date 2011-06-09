@@ -5,6 +5,7 @@
 #----------------------------------------------------------------------------#
 # globals                                                                    #
 #----------------------------------------------------------------------------#
+force=0
 dryrun=0
 master="https://raw.github.com/tpn/zfsx/master/zfsx"
 verbose=0
@@ -228,13 +229,62 @@ mklinks() {
                 cut -f 1 -d '|' | sed 's/    //;'); do
         _l=${_dir}/$_f
         if [ -e $_l ]; then
-            [ $verbose -eq 1 ] && echo skipping $_l...
+            if [ $force -eq 0 ]; then
+                if [ $verbose -eq 1 ]; then
+                    echo skipping $_l...
+                fi
+            else
+                ln -sf $_zfsx $_l
+                echo "created link '$_l'"
+            fi
         else
             ln -s $_zfsx $_l
             echo "created link '$_l'"
         fi
     done
     return
+}
+
+rmlinks() {
+    local _l _q _f
+
+    _f=""
+    if [ $force -eq 1 ]; then
+        _f="-f"
+    fi
+
+    for _l in $(find ${_dir} -type l -lname $_zfsx); do
+        if [ $verbose -eq 1 ]; then
+            echo removing $_l...
+        fi
+        rm $_f $_l
+    done
+
+    local _need_force
+    _need_force=0
+    for _l in $(cat $_zfsx | egrep '^    z[a-z]{1,3}.*# ln$' | \
+                cut -f 1 -d '|' | sed 's/    //;'); do
+        if [ -L $_l ]; then
+            if [ $force -eq 1 ]; then
+                rm -f $_l
+                echo "removed link '$_l'"
+            else
+                echo "error: $_l is a link to something other than zfsx"
+                _need_force=1
+            fi
+        elif [ -e $_l ]; then
+            if [ $force -eq 1 ]; then
+                rm -rf $_l
+                echo "removed '$_l'"
+            else
+                echo "error: $_l is not a symbolic link"
+                _need_force=1
+            fi
+        fi
+    done
+    if [ $_need_force -eq 1 ]; then
+        echo "re-run with -f argument to force removal (e.g. 'zfsx -f rmlinks')"
+    fi
 }
 
 ask() {
@@ -283,6 +333,7 @@ update() {
         rm -f $_o || true
     else
         echo downloaded new version of zfsx to $_f
+        $_zfsx rmlinks > /dev/null 2>&1 || true
         echo backing up existing version of $_zfsx to $_o...
         cp $_zfsx $_o
         echo moving new version $_f to $_zfsx...
@@ -315,6 +366,9 @@ main() {
         ;;
     mklinks)
         mklinks
+        ;;
+    rmlinks)
+        rmlinks
         ;;
     zc|create) # ln
         [ $# -lt 1 ] && usage
@@ -399,12 +453,23 @@ while : ; do
         dryrun=1
         shift
         ;;
+    -f)
+        force=1
+        shift
+        ;;
     *)
         break
     esac
 done
 
 [ $# -eq 0 ] && usage
+
+if [ $force -eq 1 ]; then
+    if [ "$1" != "mklinks" -a "$1" != "rmlinks" ]; then
+        echo "error: -f (force) only applicable to mklinks and rmlinks"
+        exit 1
+    fi
+fi
 
 main `basename $0` $*
 
