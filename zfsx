@@ -31,25 +31,6 @@ if [ ! -f $_zfsx ]; then
 fi
 
 #----------------------------------------------------------------------------#
-# leverage freebsd's /etc/rc.* infrastructure                                #
-#----------------------------------------------------------------------------#
-. /etc/rc.subr
-name="zfsx"
-rcvar=`set_rcvar`
-load_rc_config "$name"
-: ${zfsx_devmode="NO"}
-
-if ! checkyesno zfsx_devmode; then # devmode:start
-    _expected="-r-xr-xr-x 1 0 0"
-    _actual=`ls -ln $_zfsx | grep "${_zfsx}\$" | cut -f 1-5 -d ' '`
-    if [ "$_expected" != "$_actual" ]; then
-        echo error: incorrect permissions for $_zfsx
-        echo expected: $_expected, got: $_actual
-        exit 1
-    fi
-fi # devmode:end
-
-#----------------------------------------------------------------------------#
 # error handlers                                                             #
 #----------------------------------------------------------------------------#
 set -o errexit
