@@ -392,6 +392,33 @@ main() {
             sudo $_zfsx $command $options $dataset
         fi
         ;;
+    zmv|rename) # ln
+        [ $# -lt 2 ] && usage
+        local _src _dst _src_dataset _dst_dataset _dst_base_dataset
+        _src=$1
+        _dst=$2
+        _prepare_cmd rename $_src
+        _src_dataset=$dataset
+        zfs_allowed $command $_src_dataset || return 1
+
+        # Mimic a create call with the second path, as this will set up
+        # base_dataset for us, which we use below in the zfs_allowed
+        # create & rename permissions check.
+        _prepare_cmd create $_dst
+        _dst_dataset=$dataset
+        _dst_base_dataset=$base_dataset
+
+        # XXX TODO: not sure if we really need a zfs_allowed create check
+        # here; zfs_allowed rename might be sufficient.
+        zfs_allowed create $_dst_base_dataset || return 1
+        zfs_allowed rename $_dst_base_dataset || return 1
+
+        if [ -n "${SUDO_USER:-}" ]; then
+            cmd zfs rename $_src_dataset $_dst_dataset
+        else
+            sudo $_zfsx rename $_src $_dst
+        fi
+        ;;
     zs|set) # ln
         zfs_cmd set $*
         ;;
